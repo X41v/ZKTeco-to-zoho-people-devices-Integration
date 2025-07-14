@@ -4,7 +4,7 @@ This project automates attendance tracking by integrating ZKTeco biometric devic
 
 ---
 
-## 🚀 Features
+##  Features
 
 - Fetch attendance logs from ZKTeco MB20-VL biometric devices
 - Store logs in a local MariaDB database (`zk_attendance`)
@@ -47,6 +47,8 @@ pip freeze > requirements.txt
 ## 5. Setup the MariaDB Database
 Start MariaDB service:
 sudo service mariadb start
+OR 
+sudo service mariadb start
 
 Create the attendance database:
 mysql -u root -p -e "CREATE DATABASE zk_attendance;"
@@ -76,3 +78,9 @@ python3 sync_to_zoho.py         # Push unsynced logs to Zoho People
 python3 incremental_backup.py
 
 
+## 10. Automate with Cron (Optional)
+Set up cron jobs to automate the running of these scripts regularly.
+
+Example crontab (crontab -e):
+# Run every hour
+0 * * * * cd /path/to/ZKTeco-to-zoho-people-devices-Integration && source zk-env/bin/activate && python3 run_all.py >> run_all.log 2>&1
