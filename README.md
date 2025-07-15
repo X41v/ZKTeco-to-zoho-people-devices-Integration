@@ -1,4 +1,6 @@
 # ZKTeco to Zoho People Devices Integration
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 
 This project automates attendance tracking by integrating ZKTeco biometric devices with Zoho People. It collects biometric punch logs, stores them locally in a MariaDB database, and synchronizes attendance records bidirectionally with Zoho People via their API.
 
