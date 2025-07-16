@@ -89,10 +89,16 @@ BACKUP_MIN=$(echo $BACKUP_TIME | cut -d: -f2)
 BACKUP_HR=$(echo $BACKUP_TIME | cut -d: -f1)
 CRON_BACKUP="$BACKUP_MIN $BACKUP_HR * * * cd $(pwd) && source $VENV_DIR/bin/activate && python3 incremental_backup.py >> cron_backup.log 2>&1"
 
-( crontab -l 2>/dev/null; echo "$CRON_RUNALL"; echo "$CRON_BACKUP" ) | crontab -
+# 10. Add startup cron job
+print_section "🔄 Adding @reboot cron job to auto-run on startup..."
+CRON_REBOOT="@reboot cd $(pwd) && source $VENV_DIR/bin/activate && python3 run_all.py >> reboot.log 2>&1"
 
-print_section "📌 Cron jobs added successfully."
+# Combine and set all crons
+( crontab -l 2>/dev/null; echo "$CRON_REBOOT"; echo "$CRON_RUNALL"; echo "$CRON_BACKUP" ) | crontab -
+
+print_section "📌 All cron jobs added successfully."
 echo "✔ run_all.py every $RUN_INTERVAL min"
 echo "✔ incremental_backup.py daily at $BACKUP_TIME"
+echo "✔ run_all.py also runs automatically on device reboot"
 
 exit 0
