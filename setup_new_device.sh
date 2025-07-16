@@ -8,6 +8,7 @@ PYTHON_BIN="$VENV_DIR/bin/python"
 SCHEMA_FILE="schema.sql"
 ENV_TEMPLATE=".env.example"
 ENV_FILE="e.env"
+REQUIREMENTS_FILE="requirements.txt"
 
 # Colors for clarity
 INFO="\033[1;34m"
@@ -31,30 +32,27 @@ cd "$PROJECT_NAME"
 print_section "🐍 Installing Python, MariaDB and dependencies..."
 sudo apt install -y python3 python3-venv mariadb-server mariadb-client
 
-# 3. Create Virtual Environment
+# 3. Create requirements.txt if missing
+if [ ! -f "$REQUIREMENTS_FILE" ]; then
+    print_section "🛠️ Generating requirements.txt..."
+    cat <<EOL > $REQUIREMENTS_FILE
+mysql-connector-python
+requests
+python-dotenv
+pydrive
+zk==0.9
+EOL
+    echo -e "${SUCCESS}requirements.txt generated successfully.${RESET}"
+fi
+
+# 4. Create Virtual Environment
 print_section "⚙️ Setting up virtual environment..."
 python3 -m venv "$VENV_DIR"
 source "$VENV_DIR/bin/activate"
 pip install --upgrade pip
+pip install -r $REQUIREMENTS_FILE
 
-# 4. Check or Create requirements.txt with correct dependencies
-print_section "📄 Checking requirements.txt..."
-if [ ! -f "requirements.txt" ]; then
-    echo "mysql-connector-python==8.3.0" > requirements.txt
-    echo "requests==2.31.0" >> requirements.txt
-    echo "python-dotenv==1.0.1" >> requirements.txt
-    echo "pydrive==1.3.1" >> requirements.txt
-    echo "zk==0.9" >> requirements.txt
-    echo -e "${SUCCESS}requirements.txt created with default dependencies.${RESET}"
-else
-    echo -e "${SUCCESS}requirements.txt found.${RESET}"
-fi
-
-# 5. Install dependencies
-print_section "📦 Installing Python dependencies..."
-pip install -r requirements.txt
-
-# 6. Set up MariaDB Database
+# 5. Set up MariaDB Database
 print_section "🛢️ Creating MariaDB database..."
 echo -n "Enter MariaDB root password: "
 read -s DB_PASS
@@ -63,7 +61,7 @@ mysql -u root -p"$DB_PASS" -e "CREATE DATABASE IF NOT EXISTS zk_attendance;"
 mysql -u root -p"$DB_PASS" zk_attendance < "$SCHEMA_FILE"
 echo -e "\n${SUCCESS}Database ready.${RESET}"
 
-# 7. Prepare environment file
+# 6. Prepare environment file
 print_section "📝 Configuring .env file..."
 cp "$ENV_TEMPLATE" "$ENV_FILE"
 read -p "Enter ZKTeco device IP: " DEVICE_IP
@@ -73,11 +71,11 @@ sed -i "s/^DB_PASSWORD=.*/DB_PASSWORD=$DB_PASS/" "$ENV_FILE"
 sed -i "s/^DEVICE_IP=.*/DEVICE_IP=$DEVICE_IP/" "$ENV_FILE"
 sed -i "s/^DEVICE_PASSWORD=.*/DEVICE_PASSWORD=$DEVICE_PASSWORD/" "$ENV_FILE"
 
-# 8. Get access token
+# 7. Get access token
 print_section "🔐 Launching Zoho authorization script..."
 $PYTHON_BIN get_access_token.py
 
-# 9. Google Drive instructions
+# 8. Google Drive instructions
 print_section "🗂️ Google Drive Setup"
 echo -e "1. Go to https://console.cloud.google.com/apis/credentials"
 echo -e "2. Create OAuth client credentials for a Desktop app"
@@ -85,14 +83,14 @@ echo -e "3. Download the JSON and save it as: client_secrets.json"
 echo -e "4. Run the backup script later using:"
 echo -e "   source $VENV_DIR/bin/activate && python3 incremental_backup.py"
 
-# 10. Final Instructions
+# 9. Final Instructions
 print_section "✅ Setup Complete!"
 echo "To start syncing:"
 echo "  source $VENV_DIR/bin/activate && python3 run_all.py"
 echo "To back up manually:"
 echo "  python3 incremental_backup.py"
 
-# 11. Optional Cron Setup
+# 10. Optional Cron Setup
 print_section "⏰ Cron Job Setup"
 echo -n "Enter interval in minutes for run_all.py (e.g. 30): "
 read RUN_INTERVAL
