@@ -9,8 +9,6 @@ SCHEMA_FILE="schema.sql"
 ENV_TEMPLATE=".env.example"
 ENV_FILE="e.env"
 REQUIREMENTS_FILE="requirements.txt"
-APP_DB_USER="zk_user"
-APP_DB_PASS=$(openssl rand -base64 12)  # auto-generate strong password
 
 # Colors for clarity
 INFO="\033[1;34m"
@@ -54,16 +52,26 @@ source "$VENV_DIR/bin/activate"
 pip install --upgrade pip
 pip install -r $REQUIREMENTS_FILE
 
-# 5. Set up MariaDB Database & Secure User
-print_section "🛢️ Creating MariaDB database and user..."
-sudo mysql <<MYSQL_SCRIPT
-CREATE DATABASE IF NOT EXISTS zk_attendance;
-CREATE USER IF NOT EXISTS '$APP_DB_USER'@'localhost' IDENTIFIED BY '$APP_DB_PASS';
-GRANT ALL PRIVILEGES ON zk_attendance.* TO '$APP_DB_USER'@'localhost';
-FLUSH PRIVILEGES;
-MYSQL_SCRIPT
-mysql -u "$APP_DB_USER" -p"$APP_DB_PASS" zk_attendance < "$SCHEMA_FILE"
-echo -e "\n${SUCCESS}Database and user created successfully.${RESET}"
+# 5. Set up MariaDB Database
+print_section "🛢️ Creating MariaDB database..."
+echo "Choose MariaDB setup method:"
+echo "1) Use root password authentication"
+echo "2) Use sudo without password (recommended for fresh Raspberry Pi)"
+read -p "Enter choice [1 or 2]: " DB_CHOICE
+
+if [ "$DB_CHOICE" -eq 1 ]; then
+    echo -n "Enter MariaDB root password: "
+    read -s DB_PASS
+    echo
+    mysql -u root -p"$DB_PASS" -e "CREATE DATABASE IF NOT EXISTS zk_attendance;"
+    mysql -u root -p"$DB_PASS" zk_attendance < "$SCHEMA_FILE"
+else
+    sudo mysql -e "CREATE DATABASE IF NOT EXISTS zk_attendance;"
+    sudo mysql zk_attendance < "$SCHEMA_FILE"
+    DB_PASS=""
+fi
+
+echo -e "\n${SUCCESS}Database ready.${RESET}"
 
 # 6. Prepare environment file
 print_section "📝 Configuring .env file..."
@@ -71,10 +79,10 @@ cp "$ENV_TEMPLATE" "$ENV_FILE"
 read -p "Enter ZKTeco device IP: " DEVICE_IP
 read -p "Enter ZKTeco device password: " DEVICE_PASSWORD
 
-sed -i "s/^DB_USER=.*/DB_USER=$APP_DB_USER/" "$ENV_FILE"
-sed -i "s/^DB_PASSWORD=.*/DB_PASSWORD=$APP_DB_PASS/" "$ENV_FILE"
-sed -i "s/^DEVICE_IP=.*/DEVICE_IP=$DEVICE_IP/" "$ENV_FILE"
-sed -i "s/^DEVICE_PASSWORD=.*/DEVICE_PASSWORD=$DEVICE_PASSWORD/" "$ENV_FILE"
+# Use '|' delimiter to avoid sed errors
+sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=$DB_PASS|" "$ENV_FILE"
+sed -i "s|^DEVICE_IP=.*|DEVICE_IP=$DEVICE_IP|" "$ENV_FILE"
+sed -i "s|^DEVICE_PASSWORD=.*|DEVICE_PASSWORD=$DEVICE_PASSWORD|" "$ENV_FILE"
 
 # 7. Get access token
 print_section "🔐 Launching Zoho authorization script..."
