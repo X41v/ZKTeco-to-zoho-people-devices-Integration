@@ -40,7 +40,7 @@ mysql-connector-python
 requests
 python-dotenv
 pydrive
-zk==0.9
+zk==0.9.4
 EOL
     echo -e "${SUCCESS}requirements.txt generated successfully.${RESET}"
 fi
