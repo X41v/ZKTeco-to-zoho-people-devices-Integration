@@ -2,147 +2,149 @@
 
 set -e
 
-PROJECT_NAME="ZKTeco-to-zoho-people-devices-Integration"
-VENV_DIR="zk-env"
-PYTHON_BIN="$VENV_DIR/bin/python"
-SCHEMA_FILE="schema.sql"
-ENV_TEMPLATE=".env.example"
-ENV_FILE=".env"
-REQUIREMENTS_FILE="requirements.txt"
-SERVICE_NAME="zk_sync"
-BACKUP_SERVICE_NAME="zk_backup"
-
-INFO="\033[1;34m"
-SUCCESS="\033[1;32m"
-RESET="\033[0m"
-
-print_section() {
-    echo -e "\n${INFO}$1${RESET}"
-}
-
-# 1. Install necessary packages
-print_section "📦 Installing system packages..."
+echo "🔧 Updating and installing dependencies..."
 sudo apt update
-sudo apt install -y git python3 python3-venv mariadb-server mariadb-client systemd
+sudo apt install -y python3 python3-venv python3-pip mariadb-server mariadb-client git cron systemd
 
-# 2. Clone project repo if not present
-print_section "⬇️ Cloning project repository..."
-if [ ! -d "$PROJECT_NAME" ]; then
-    git clone https://github.com/X41v/ZKTeco-to-zoho-people-devices-Integration.git
-fi
-cd "$PROJECT_NAME"
+echo "📁 Cloning project repository..."
+cd ~
+rm -rf ZKTeco-to-zoho-people-devices-Integration
+git clone https://github.com/X41v/ZKTeco-to-zoho-people-devices-Integration.git
+cd ZKTeco-to-zoho-people-devices-Integration
 
-# 3. Create virtual environment and install dependencies
-print_section "⚙️ Setting up Python environment..."
-python3 -m venv "$VENV_DIR"
-source "$VENV_DIR/bin/activate"
-
-if [ ! -f "$REQUIREMENTS_FILE" ]; then
-    cat <<EOL > "$REQUIREMENTS_FILE"
-mysql-connector-python
-requests
-python-dotenv
-pydrive
-zk==0.9.4
-EOL
-fi
-
+echo "🐍 Setting up Python virtual environment..."
+python3 -m venv zk-env
+source zk-env/bin/activate
 pip install --upgrade pip
-pip install -r "$REQUIREMENTS_FILE"
+pip install -r requirements.txt
+pip install pydrive python-dotenv
 
-# 4. Configure MariaDB
-print_section "🛢️ Setting up MariaDB..."
-sudo service mariadb start
-sudo mysql -e "CREATE DATABASE IF NOT EXISTS zk_attendance;"
-sudo mysql zk_attendance < "$SCHEMA_FILE"
+echo "📝 Creating .env file interactively..."
+read -p "Enter MySQL password: " MYSQL_PASS
+read -p "Enter Zoho Client ID: " ZOHO_CLIENT_ID
+read -p "Enter Zoho Client Secret: " ZOHO_CLIENT_SECRET
+read -p "Enter Zoho Refresh Token: " ZOHO_REFRESH_TOKEN
+read -p "Enter ZKTeco Device IP (e.g., 192.168.68.52): " DEVICE_IP
+read -p "Enter ZKTeco Device Port (default: 4370): " DEVICE_PORT
+read -p "Enter ZKTeco Device Password: " DEVICE_PASS
+read -p "Enter Google Drive Folder ID (or leave blank): " GDRIVE_ID
 
-# 5. Configure .env file
-print_section "📝 Setting up .env file..."
-cp "$ENV_TEMPLATE" "$ENV_FILE"
-read -p "Enter ZKTeco device IP: " DEVICE_IP
-read -p "Enter ZKTeco device password: " DEVICE_PASSWORD
-sed -i "s|^DEVICE_IP=.*|DEVICE_IP=$DEVICE_IP|" "$ENV_FILE"
-sed -i "s|^DEVICE_PASSWORD=.*|DEVICE_PASSWORD=$DEVICE_PASSWORD|" "$ENV_FILE"
+cat > .env <<EOF
+# MySQL Database
+DB_HOST=localhost
+DB_USER=root
+DB_PASS=$MYSQL_PASS
+DB_NAME=zk_attendance
 
-# 6. Get Zoho token
-print_section "🔐 Authorizing Zoho..."
-$PYTHON_BIN get_access_token.py
+# Zoho People API
+ZOHO_DOMAIN=zoho.com
+ZOHO_CLIENT_ID=$ZOHO_CLIENT_ID
+ZOHO_CLIENT_SECRET=$ZOHO_CLIENT_SECRET
+ZOHO_REFRESH_TOKEN=$ZOHO_REFRESH_TOKEN
 
-# 7. Systemd service to run run_all.py every 5 minutes
-print_section "⚙️ Creating systemd service for sync..."
+# ZKTeco Device
+DEVICE_IP=$DEVICE_IP
+DEVICE_PORT=${DEVICE_PORT:-4370}
+DEVICE_PASSWORD=$DEVICE_PASS
 
-sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null <<EOL
+# Google Drive
+GDRIVE_FOLDER_ID=$GDRIVE_ID
+EOF
+
+echo -e "\n✅ .env file created."
+
+echo "🗃️ Creating database and tables..."
+mysql -uroot -p"$MYSQL_PASS" <<EOF
+CREATE DATABASE IF NOT EXISTS zk_attendance;
+USE zk_attendance;
+
+CREATE TABLE IF NOT EXISTS attendance_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id VARCHAR(255),
+    name VARCHAR(255),
+    punch_time DATETIME,
+    punch_type VARCHAR(10),
+    source VARCHAR(50),
+    synced BOOLEAN DEFAULT FALSE
+);
+
+CREATE TABLE IF NOT EXISTS user_mapping (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    device_user_id VARCHAR(255),
+    zoho_employee_id VARCHAR(255)
+);
+EOF
+
+echo "✅ Database ready."
+
+echo "🛠️ Creating systemd service and timer..."
+SERVICE_FILE=/etc/systemd/system/zk_sync.service
+TIMER_FILE=/etc/systemd/system/zk_sync.timer
+
+sudo tee "$SERVICE_FILE" > /dev/null <<EOL
 [Unit]
-Description=ZKTeco to Zoho People Sync
+Description=ZKTeco to Zoho People Sync Service
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=$(pwd)
-ExecStart=$(pwd)/$VENV_DIR/bin/python run_all.py
+WorkingDirectory=/home/zk_int/ZKTeco-to-zoho-people-devices-Integration
+ExecStart=/home/zk_int/ZKTeco-to-zoho-people-devices-Integration/zk-env/bin/python run_all.py
 Restart=always
-Environment="PYTHONUNBUFFERED=1"
 
 [Install]
 WantedBy=multi-user.target
 EOL
 
-sudo tee /etc/systemd/system/${SERVICE_NAME}.timer > /dev/null <<EOL
+sudo tee "$TIMER_FILE" > /dev/null <<EOL
 [Unit]
-Description=Run run_all.py every 5 minutes
+Description=Run ZK Sync every 5 minutes
 
 [Timer]
-OnBootSec=2min
+OnBootSec=1min
 OnUnitActiveSec=5min
-Unit=${SERVICE_NAME}.service
+Unit=zk_sync.service
 
 [Install]
 WantedBy=timers.target
 EOL
 
-# 8. Systemd service for daily backup at midnight
-print_section "🗂️ Creating systemd service for backup..."
-
-sudo tee /etc/systemd/system/${BACKUP_SERVICE_NAME}.service > /dev/null <<EOL
-[Unit]
-Description=ZKTeco DB Backup
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=$(pwd)
-ExecStart=$(pwd)/$VENV_DIR/bin/python incremental_backup.py
-Environment="PYTHONUNBUFFERED=1"
-EOL
-
-sudo tee /etc/systemd/system/${BACKUP_SERVICE_NAME}.timer > /dev/null <<EOL
-[Unit]
-Description=Run DB backup daily at midnight
-
-[Timer]
-OnCalendar=*-*-* 00:00:00
-Persistent=true
-Unit=${BACKUP_SERVICE_NAME}.service
-
-[Install]
-WantedBy=timers.target
-EOL
-
-# 9. Enable all timers and services
-print_section "📅 Enabling systemd timers and services..."
-
-sudo systemctl daemon-reexec
+echo "🔄 Enabling systemd service and timer..."
 sudo systemctl daemon-reload
-sudo systemctl enable ${SERVICE_NAME}.timer
-sudo systemctl start ${SERVICE_NAME}.timer
-sudo systemctl enable ${BACKUP_SERVICE_NAME}.timer
-sudo systemctl start ${BACKUP_SERVICE_NAME}.timer
+sudo systemctl enable zk_sync.service zk_sync.timer
+sudo systemctl start zk_sync.timer
 
-# 10. Final notes
-print_section "✅ SETUP COMPLETE!"
-echo -e "${SUCCESS}✔ run_all.py scheduled every 5 mins"
-echo -e "${SUCCESS}✔ Backup scheduled daily at 00:00"
-echo -e "${SUCCESS}✔ All will resume after reboot"
-echo -e "Check services with: sudo systemctl status ${SERVICE_NAME}.timer"
+echo "🗃️ Configuring Google Drive backup..."
 
-exit 0
+echo "📁 Copying Google client_secrets.json to project directory..."
+read -p "Paste the full path to your Google client_secrets.json file: " GOOGLE_SECRET
+cp "$GOOGLE_SECRET" ./client_secrets.json
+
+echo "🔐 First-time Google Drive setup..."
+echo "➡️ When prompted, follow the link, sign in with your Google account, and paste the verification code."
+
+python first_drive_auth.py || true
+
+echo "🕛 Setting up cron job for daily midnight backup..."
+CRON_CMD="/home/zk_int/ZKTeco-to-zoho-people-devices-Integration/zk-env/bin/python /home/zk_int/ZKTeco-to-zoho-people-devices-Integration/incremental_backup.py >> /var/log/zk_backup.log 2>&1"
+(crontab -l 2>/dev/null | grep -v 'incremental_backup.py'; echo "0 0 * * * $CRON_CMD") | crontab -
+
+echo -e "\n✅ Midnight backup scheduled."
+
+echo "🎉 Setup is complete!"
+
+echo -e "\n📍 Steps you must complete manually (only once):"
+echo "1. Go to https://console.cloud.google.com/apis/credentials"
+echo "   - Create a Desktop OAuth 2.0 client"
+echo "   - Download and rename the credentials file to: client_secrets.json"
+echo "   - Put it somewhere safe and enter its path when prompted"
+echo
+echo "2. Enable the Google Drive API:"
+echo "   https://console.developers.google.com/apis/library/drive.googleapis.com"
+echo
+echo "3. Add your email as a test user under OAuth consent screen"
+echo "   (This fixes 'access_denied' errors)"
+echo
+echo "📝 Logs:"
+echo " - Sync:   journalctl -u zk_sync.service -f"
+echo " - Backup: tail -f /var/log/zk_backup.log"
