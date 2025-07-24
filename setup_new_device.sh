@@ -7,10 +7,11 @@ VENV_DIR="zk-env"
 PYTHON_BIN="$VENV_DIR/bin/python"
 SCHEMA_FILE="schema.sql"
 ENV_TEMPLATE=".env.example"
-ENV_FILE="e.env"
+ENV_FILE=".env"
 REQUIREMENTS_FILE="requirements.txt"
+SERVICE_NAME="zk_sync"
+BACKUP_SERVICE_NAME="zk_backup"
 
-# Colors
 INFO="\033[1;34m"
 SUCCESS="\033[1;32m"
 RESET="\033[0m"
@@ -19,69 +20,60 @@ print_section() {
     echo -e "\n${INFO}$1${RESET}"
 }
 
-# 1. Install system packages
+# 1. Install necessary packages
 print_section "📦 Installing system packages..."
 sudo apt update
 sudo apt install -y git python3 python3-venv mariadb-server mariadb-client systemd
 
-# 2. Clone project if not exists
-print_section "⬇️ Cloning project..."
+# 2. Clone project repo if not present
+print_section "⬇️ Cloning project repository..."
 if [ ! -d "$PROJECT_NAME" ]; then
     git clone https://github.com/X41v/ZKTeco-to-zoho-people-devices-Integration.git
 fi
 cd "$PROJECT_NAME"
 
-# 3. Generate requirements.txt if missing
+# 3. Create virtual environment and install dependencies
+print_section "⚙️ Setting up Python environment..."
+python3 -m venv "$VENV_DIR"
+source "$VENV_DIR/bin/activate"
+
 if [ ! -f "$REQUIREMENTS_FILE" ]; then
-    print_section "🛠️ Generating requirements.txt..."
-    cat <<EOL > $REQUIREMENTS_FILE
+    cat <<EOL > "$REQUIREMENTS_FILE"
 mysql-connector-python
 requests
 python-dotenv
 pydrive
 zk==0.9.4
 EOL
-    echo -e "${SUCCESS}requirements.txt generated successfully.${RESET}"
 fi
 
-# 4. Setup virtual environment
-print_section "⚙️ Setting up virtual environment..."
-python3 -m venv "$VENV_DIR"
-source "$VENV_DIR/bin/activate"
 pip install --upgrade pip
-pip install -r $REQUIREMENTS_FILE
+pip install -r "$REQUIREMENTS_FILE"
 
-# 5. MariaDB setup
-print_section "🛢️ Configuring MariaDB (no root password)..."
+# 4. Configure MariaDB
+print_section "🛢️ Setting up MariaDB..."
 sudo service mariadb start
 sudo mysql -e "CREATE DATABASE IF NOT EXISTS zk_attendance;"
 sudo mysql zk_attendance < "$SCHEMA_FILE"
-echo -e "${SUCCESS}Database ready.${RESET}"
 
-# 6. Configure .env file
-print_section "📝 Configuring .env file..."
+# 5. Configure .env file
+print_section "📝 Setting up .env file..."
 cp "$ENV_TEMPLATE" "$ENV_FILE"
 read -p "Enter ZKTeco device IP: " DEVICE_IP
 read -p "Enter ZKTeco device password: " DEVICE_PASSWORD
 sed -i "s|^DEVICE_IP=.*|DEVICE_IP=$DEVICE_IP|" "$ENV_FILE"
 sed -i "s|^DEVICE_PASSWORD=.*|DEVICE_PASSWORD=$DEVICE_PASSWORD|" "$ENV_FILE"
 
-# 7. Zoho Authorization
-print_section "🔐 Running Zoho authorization..."
+# 6. Get Zoho token
+print_section "🔐 Authorizing Zoho..."
 $PYTHON_BIN get_access_token.py
 
-# 8. Google Drive instructions
-print_section "🗂️ Google Drive Setup Instructions"
-echo -e "1. Go to https://console.cloud.google.com/apis/credentials"
-echo -e "2. Create OAuth client for Desktop app"
-echo -e "3. Download JSON as client_secrets.json"
-echo -e "4. Run: source $VENV_DIR/bin/activate && python3 incremental_backup.py"
+# 7. Systemd service to run run_all.py every 5 minutes
+print_section "⚙️ Creating systemd service for sync..."
 
-# 9. Systemd service for run_all.py
-print_section "⚙️ Creating systemd service for run_all.py..."
-sudo tee /etc/systemd/system/zk_sync.service > /dev/null <<EOL
+sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null <<EOL
 [Unit]
-Description=ZKTeco to Zoho People Sync Service
+Description=ZKTeco to Zoho People Sync
 After=network.target
 
 [Service]
@@ -89,63 +81,68 @@ Type=simple
 WorkingDirectory=$(pwd)
 ExecStart=$(pwd)/$VENV_DIR/bin/python run_all.py
 Restart=always
+Environment="PYTHONUNBUFFERED=1"
 
 [Install]
 WantedBy=multi-user.target
 EOL
 
-# 10. Timer for run_all.py (5 min)
-sudo tee /etc/systemd/system/zk_sync.timer > /dev/null <<EOL
+sudo tee /etc/systemd/system/${SERVICE_NAME}.timer > /dev/null <<EOL
 [Unit]
 Description=Run run_all.py every 5 minutes
 
 [Timer]
 OnBootSec=2min
 OnUnitActiveSec=5min
-Unit=zk_sync.service
+Unit=${SERVICE_NAME}.service
 
 [Install]
 WantedBy=timers.target
 EOL
 
-sudo systemctl daemon-reload
-sudo systemctl enable zk_sync.timer
-sudo systemctl start zk_sync.timer
+# 8. Systemd service for daily backup at midnight
+print_section "🗂️ Creating systemd service for backup..."
 
-# 11. Systemd service for daily backup
-print_section "⚙️ Creating systemd service for backups..."
-sudo tee /etc/systemd/system/zk_backup.service > /dev/null <<EOL
+sudo tee /etc/systemd/system/${BACKUP_SERVICE_NAME}.service > /dev/null <<EOL
 [Unit]
-Description=ZKTeco Database Backup
+Description=ZKTeco DB Backup
 After=network.target
 
 [Service]
 Type=simple
 WorkingDirectory=$(pwd)
 ExecStart=$(pwd)/$VENV_DIR/bin/python incremental_backup.py
+Environment="PYTHONUNBUFFERED=1"
 EOL
 
-# 12. Timer for daily backup
-sudo tee /etc/systemd/system/zk_backup.timer > /dev/null <<EOL
+sudo tee /etc/systemd/system/${BACKUP_SERVICE_NAME}.timer > /dev/null <<EOL
 [Unit]
-Description=Run backup daily at 00:00
+Description=Run DB backup daily at midnight
 
 [Timer]
 OnCalendar=*-*-* 00:00:00
 Persistent=true
-Unit=zk_backup.service
+Unit=${BACKUP_SERVICE_NAME}.service
 
 [Install]
 WantedBy=timers.target
 EOL
 
-sudo systemctl enable zk_backup.timer
-sudo systemctl start zk_backup.timer
+# 9. Enable all timers and services
+print_section "📅 Enabling systemd timers and services..."
 
-# 13. Final info
-print_section "✅ Setup Complete!"
-echo "run_all.py will now run every 5 minutes."
-echo "incremental_backup.py will run daily at midnight."
-echo "You can check status with: sudo systemctl status zk_sync.timer"
+sudo systemctl daemon-reexec
+sudo systemctl daemon-reload
+sudo systemctl enable ${SERVICE_NAME}.timer
+sudo systemctl start ${SERVICE_NAME}.timer
+sudo systemctl enable ${BACKUP_SERVICE_NAME}.timer
+sudo systemctl start ${BACKUP_SERVICE_NAME}.timer
+
+# 10. Final notes
+print_section "✅ SETUP COMPLETE!"
+echo -e "${SUCCESS}✔ run_all.py scheduled every 5 mins"
+echo -e "${SUCCESS}✔ Backup scheduled daily at 00:00"
+echo -e "${SUCCESS}✔ All will resume after reboot"
+echo -e "Check services with: sudo systemctl status ${SERVICE_NAME}.timer"
 
 exit 0
