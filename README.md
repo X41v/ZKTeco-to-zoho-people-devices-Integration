@@ -44,7 +44,7 @@ cd ZKTeco-to-zoho-people-devices-Integration
 
 ```bash
 chmod +x setup_new_device.sh
-./setup_new_device.sh
+sudo ./setup_new_device.sh
 ```
 
 This script will:
