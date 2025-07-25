@@ -1,110 +1,83 @@
 #!/bin/bash
 
-echo "🔧 Starting ZKTeco to Zoho People Setup..."
+echo "🔧 Setting up ZKTeco to Zoho Integration Environment..."
 
-# Update and install system packages
-echo "📦 Installing required system packages..."
-sudo apt update && sudo apt install -y python3-venv mariadb-client git
+# Setup variables
+PROJECT_DIR="$HOME/ZKTeco-to-zoho-people-devices-Integration"
+ENV_FILE="$PROJECT_DIR/.env"
+SERVICE_FILE="/etc/systemd/system/zk_sync.service"
 
-# Clone the repository
-echo "🔁 Cloning project repo..."
-git clone https://github.com/X41v/ZKTeco-to-zoho-people-devices-Integration.git
-cd ZKTeco-to-zoho-people-devices-Integration || exit
+# Ask for inputs
+read -p "Enter MySQL root password: " MYSQL_ROOT_PASSWORD
+read -p "Enter Zoho Client ID: " ZOHO_CLIENT_ID
+read -p "Enter Zoho Client Secret: " ZOHO_CLIENT_SECRET
+read -p "Enter Zoho Refresh Token (or leave blank to insert later): " ZOHO_REFRESH_TOKEN
 
-# Create Python virtual environment
-echo "🐍 Creating virtual environment..."
+# Install system dependencies
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip mariadb-server unzip curl git
+
+# Create virtual environment
+cd "$PROJECT_DIR"
 python3 -m venv zk-env
 source zk-env/bin/activate
-
-# Install Python packages
-echo "📦 Installing Python requirements..."
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# Create .env file interactively
-echo "📝 Creating .env file..."
-read -p "Enter MySQL password: " DB_PASS
-read -p "Enter Zoho Client ID: " ZOHO_CLIENT_ID
-read -p "Enter Zoho Client Secret: " ZOHO_CLIENT_SECRET
-read -p "Enter ZKTeco Device IP: " DEVICE_IP
-read -p "Enter ZKTeco Port (default 4370): " DEVICE_PORT
-DEVICE_PORT=${DEVICE_PORT:-4370}
-read -p "Enter ZKTeco Device Password: " DEVICE_PASSWORD
-read -p "Enter Google Drive Folder ID: " GDRIVE_FOLDER_ID
-
-# Run token generator
-echo "🌐 Launching Zoho token generator..."
-python3 get_access_token.py
-read -p "Paste your Zoho refresh token here: " ZOHO_REFRESH_TOKEN
-
-cat <<EOF > .env
-DB_HOST=localhost
-DB_USER=root
-DB_PASS=$DB_PASS
-DB_NAME=zk_attendance
-
-ZOHO_DOMAIN=zoho.com
+# Create .env file
+echo "Creating .env file..."
+cat <<EOF > "$ENV_FILE"
+MYSQL_HOST=localhost
+MYSQL_USER=root
+MYSQL_PASSWORD=$MYSQL_ROOT_PASSWORD
+MYSQL_DATABASE=attendance
+DEVICE_IP=192.168.68.52
+DEVICE_PORT=4370
+DEVICE_PASSWORD=123456
 ZOHO_CLIENT_ID=$ZOHO_CLIENT_ID
 ZOHO_CLIENT_SECRET=$ZOHO_CLIENT_SECRET
 ZOHO_REFRESH_TOKEN=$ZOHO_REFRESH_TOKEN
-
-DEVICE_IP=$DEVICE_IP
-DEVICE_PORT=$DEVICE_PORT
-DEVICE_PASSWORD=$DEVICE_PASSWORD
-
-GDRIVE_FOLDER_ID=$GDRIVE_FOLDER_ID
 EOF
 
-# Set up MySQL database
+# Create database and schema
 echo "🛢️ Creating MySQL database..."
-sudo mysql -u root <<MYSQL_SCRIPT
-CREATE DATABASE IF NOT EXISTS zk_attendance;
-USE zk_attendance;
-CREATE TABLE IF NOT EXISTS attendance_logs (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    user_id INT,
-    name VARCHAR(255),
-    timestamp DATETIME,
-    punch_type VARCHAR(20),
-    source VARCHAR(50),
-    synced BOOLEAN DEFAULT FALSE
-);
-MYSQL_SCRIPT
+sudo mysql -u root -e "CREATE DATABASE IF NOT EXISTS attendance;"
+sudo mysql -u root attendance < schema.sql
 
-# Systemd service setup
+# Setup Google Drive auth
+echo "🔑 Authenticating Google Drive..."
+source zk-env/bin/activate
+python3 get_access_token.py
+
+# Create systemd service
 echo "🖥️ Setting up systemd service..."
-cat <<EOF | sudo tee /etc/systemd/system/zkteco_sync.service
+sudo tee "$SERVICE_FILE" > /dev/null <<EOF
 [Unit]
-Description=ZKTeco Sync Service
-After=network.target
+Description=ZKTeco-Zoho Sync Service
+After=network.target mariadb.service
 
 [Service]
-User=$USER
-WorkingDirectory=$(pwd)
-ExecStart=$(pwd)/zk-env/bin/python3 run_all.py
+Type=simple
+WorkingDirectory=$PROJECT_DIR
+ExecStart=$PROJECT_DIR/zk-env/bin/python3 $PROJECT_DIR/run_all.py
 Restart=always
+User=$USER
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
+# Reload and enable service
 sudo systemctl daemon-reexec
 sudo systemctl daemon-reload
-sudo systemctl enable zkteco_sync.service
-sudo systemctl start zkteco_sync.service
+sudo systemctl enable zk_sync.service
 
-# Cron job for midnight backup
+# Schedule backup at midnight
 echo "🕛 Scheduling midnight backup..."
-( crontab -l 2>/dev/null; echo "0 0 * * * cd $(pwd) && $(pwd)/zk-env/bin/python3 incremental_backup.py" ) | crontab -
+(crontab -l 2>/dev/null; echo "0 0 * * * cd $PROJECT_DIR && source zk-env/bin/activate && python3 incremental_backup.py") | crontab -
 
+echo ""
 echo "✅ Setup complete!"
-
-echo "
-📌 Final Checklist:
-- Complete Google Drive authentication via get_access_token.py if not prompted
-- Ensure ZKTeco device is connected at $DEVICE_IP:$DEVICE_PORT
-- Reboot system to test auto-restart
-
-🌙 Backups will run daily at midnight.
-🔁 The sync service runs every 5 minutes continuously.
-"
+echo ""
+echo "📌 On reboot, the sync system will start automatically."
+echo "🌀 Reboot now with: sudo reboot"
