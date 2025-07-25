@@ -1,138 +1,121 @@
 #!/bin/bash
 
-set -e
+# Project setup script for ZKTeco to Zoho People Integration
 
-# Detect project path
-echo "🔍 Detecting project directory..."
-PROJECT_PATH=$(pwd)
-echo "📁 Project Path: $PROJECT_PATH"
+echo "🔧 Setting up project..."
 
-# Update and install system packages
-echo "📦 Installing required packages..."
-sudo apt update && sudo apt install -y python3 python3-pip python3-venv mariadb-server mariadb-client git cron
-
-# Setup Python virtual environment
-echo "🐍 Setting up Python virtual environment..."
-python3 -m venv zk-env
-source zk-env/bin/activate
-pip install -r requirements.txt
-
-# Secure MariaDB and set root password
-echo "🔐 Configuring MariaDB..."
-read -s -p "Enter password for MySQL root user: " DB_PASSWORD
-echo
-
-# Secure installation (assume fresh)
-sudo systemctl start mariadb
-sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_PASSWORD'; FLUSH PRIVILEGES;"
-
-# Create database and import schema
+# Determine project directory
+PROJECT_DIR=$(pwd)
+VENV_DIR="$PROJECT_DIR/zk-env"
+ENV_FILE="$PROJECT_DIR/e.env"
+SERVICE_FILE="/etc/systemd/system/zk_run_all.service"
+TIMER_FILE="/etc/systemd/system/zk_run_all.timer"
+BACKUP_SERVICE="/etc/systemd/system/zk_incremental_backup.service"
+BACKUP_TIMER="/etc/systemd/system/zk_incremental_backup.timer"
 DB_NAME="zk_attendance"
-echo "🛢️ Creating MySQL database $DB_NAME..."
-sudo mysql -u root -p$DB_PASSWORD -e "CREATE DATABASE IF NOT EXISTS $DB_NAME;"
-sudo mysql -u root -p$DB_PASSWORD $DB_NAME < schema.sql
 
-# Collect .env information
-read -p "Enter ZKTeco IP Address (e.g., 192.168.68.52): " DEVICE_IP
-read -p "Enter ZKTeco device password: " DEVICE_PASSWORD
+# Ensure system packages are updated
+sudo apt-get update
+sudo apt-get install -y python3 python3-pip python3-venv mariadb-server libmariadb-dev curl jq
+
+# Create virtual environment
+if [ ! -d "$VENV_DIR" ]; then
+  python3 -m venv "$VENV_DIR"
+fi
+source "$VENV_DIR/bin/activate"
+
+# Install Python requirements
+pip install --upgrade pip
+pip install -r "$PROJECT_DIR/requirements.txt"
+
+# Create database if not exists
+echo "CREATE DATABASE IF NOT EXISTS $DB_NAME;" | sudo mariadb
+sudo mariadb "$DB_NAME" < "$PROJECT_DIR/schema.sql"
+
+# Prompt for environment variables
+echo "🔑 Creating .env file..."
+read -p "Enter MySQL password: " MYSQL_PASSWORD
 read -p "Enter Zoho Client ID: " ZOHO_CLIENT_ID
 read -p "Enter Zoho Client Secret: " ZOHO_CLIENT_SECRET
 
-# Create .env file
-echo "✅ Creating .env file..."
-cat > e.env <<EOF
-DB_NAME=$DB_NAME
-DB_USER=root
-DB_PASSWORD=$DB_PASSWORD
-DEVICE_IP=$DEVICE_IP
-DEVICE_PORT=4370
-DEVICE_PASSWORD=$DEVICE_PASSWORD
+cat > "$ENV_FILE" <<EOF
+MYSQL_HOST=localhost
+MYSQL_PORT=3306
+MYSQL_USER=root
+MYSQL_PASSWORD=$MYSQL_PASSWORD
+MYSQL_DATABASE=$DB_NAME
 ZOHO_CLIENT_ID=$ZOHO_CLIENT_ID
 ZOHO_CLIENT_SECRET=$ZOHO_CLIENT_SECRET
 EOF
 
-# Run Python to fetch access token and update .env
-echo "🔑 Running access token fetch script..."
-source zk-env/bin/activate
-python3 get_access_token.py
-
-# Ensure e.env includes the refresh token
-echo "✅ Please confirm e.env contains ZOHO_REFRESH_TOKEN. If not, paste it manually."
-
-# Setup systemd service for run_all.py
-echo "🖥️ Setting up systemd service for run_all.py..."
-SERVICE_NAME="zk_run_all"
-TIMER_NAME="$SERVICE_NAME.timer"
-
-cat > /etc/systemd/system/$SERVICE_NAME.service <<EOF
+# Systemd Service for run_all.py
+echo "🛠️  Creating systemd service for run_all.py..."
+sudo bash -c "cat > $SERVICE_FILE" <<EOF
 [Unit]
 Description=Run ZKTeco Integration Script
 After=network.target mariadb.service
 
 [Service]
-Type=simple
-WorkingDirectory=$PROJECT_PATH
-ExecStart=$PROJECT_PATH/zk-env/bin/python3 $PROJECT_PATH/run_all.py
-EnvironmentFile=$PROJECT_PATH/e.env
+Type=oneshot
+WorkingDirectory=$PROJECT_DIR
+ExecStart=/bin/bash -c 'source $VENV_DIR/bin/activate && python3 $PROJECT_DIR/run_all.py'
+EnvironmentFile=$ENV_FILE
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-cat > /etc/systemd/system/$TIMER_NAME <<EOF
+# Timer for every 5 minutes
+sudo bash -c "cat > $TIMER_FILE" <<EOF
 [Unit]
-Description=Run zk_run_all.py every 5 minutes
+Description=Run run_all.py every 5 minutes
 
 [Timer]
-OnBootSec=1min
+OnBootSec=5min
 OnUnitActiveSec=5min
-Unit=$SERVICE_NAME.service
+Persistent=true
 
 [Install]
 WantedBy=timers.target
 EOF
 
-# Setup systemd service for incremental_backup.py
-BACKUP_SERVICE="zk_backup"
-BACKUP_TIMER="$BACKUP_SERVICE.timer"
-
-cat > /etc/systemd/system/$BACKUP_SERVICE.service <<EOF
+# Systemd Service for incremental_backup.py
+echo "🛠️  Creating systemd service for backup..."
+sudo bash -c "cat > $BACKUP_SERVICE" <<EOF
 [Unit]
-Description=Run Backup Script
+Description=Incremental Backup of Attendance DB
 After=network.target mariadb.service
 
 [Service]
-Type=simple
-WorkingDirectory=$PROJECT_PATH
-ExecStart=$PROJECT_PATH/zk-env/bin/python3 $PROJECT_PATH/incremental_backup.py
-EnvironmentFile=$PROJECT_PATH/e.env
+Type=oneshot
+WorkingDirectory=$PROJECT_DIR
+ExecStart=/bin/bash -c 'source $VENV_DIR/bin/activate && python3 $PROJECT_DIR/incremental_backup.py'
+EnvironmentFile=$ENV_FILE
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-cat > /etc/systemd/system/$BACKUP_TIMER <<EOF
+# Timer for daily backup at midnight
+sudo bash -c "cat > $BACKUP_TIMER" <<EOF
 [Unit]
-Description=Run Backup Script at Midnight
+Description=Run incremental backup at midnight
 
 [Timer]
 OnCalendar=*-*-* 00:00:00
 Persistent=true
-Unit=$BACKUP_SERVICE.service
 
 [Install]
 WantedBy=timers.target
 EOF
 
-# Enable and start services and timers
-echo "🔄 Enabling systemd services and timers..."
+# Reload and enable all services/timers
+echo "🔁 Reloading systemd..."
 sudo systemctl daemon-reexec
 sudo systemctl daemon-reload
-sudo systemctl enable $SERVICE_NAME.service $TIMER_NAME $BACKUP_SERVICE.service $BACKUP_TIMER
-sudo systemctl start $TIMER_NAME $BACKUP_TIMER
+sudo systemctl enable zk_run_all.timer
+sudo systemctl start zk_run_all.timer
+sudo systemctl enable zk_incremental_backup.timer
+sudo systemctl start zk_incremental_backup.timer
 
-# Final message
-echo -e "\n✅ Setup complete!"
-echo "📌 After reboot, everything will start automatically."
-echo "🔁 You can test now by running: python3 run_all.py"
-echo "🌀 Reboot the device to confirm full automation."
+echo "✅ Setup complete!"
