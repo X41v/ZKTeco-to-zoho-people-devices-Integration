@@ -1,5 +1,14 @@
-mysql-connector-python==8.3.0
-requests==2.31.0
-python-dotenv==1.0.1
-pydrive==1.3.1
-zk==0.9.4
+pip install \
+  zkpy==0.2.0 \
+  pyzk==0.9 \
+  requests==2.32.4 \
+  python-dotenv==1.1.0 \
+  mysql-connector-python==9.3.0 \
+  PyDrive==1.3.1 \
+  oauth2client==4.1.3 \
+  google-auth==2.40.3 \
+  google-api-python-client==2.176.0 \
+  google-auth-httplib2==0.2.0 \
+  httplib2==0.22.0 \
+  thriftpy2==0.5.2
+
