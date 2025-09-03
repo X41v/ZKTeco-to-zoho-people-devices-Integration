@@ -1,0 +1,12 @@
+[Unit]
+Description=Run ZKTeco to Zoho sync
+After=network.target mariadb.service
+Requires=mariadb.service
+
+[Service]
+Type=oneshot
+User=metaboxzkteco
+WorkingDirectory=/home/metaboxzkteco/ZKTeco-to-zoho-people-devices-Integration
+ExecStart=/bin/bash -c "source /home/metaboxzkteco/ZKTeco-to-zoho-people-devices-Integration/zk-env/bin/activate && python3 run_all.py"
+StandardOutput=append:/home/metaboxzkteco/zkteco-run.log
+StandardError=append:/home/metaboxzkteco/zkteco-run.log
